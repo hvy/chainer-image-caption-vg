@@ -7,14 +7,11 @@ from chainer import cuda
 
 class ImageCaptionModel(chainer.Chain):
     def __init__(self, vocab, img_feat_size=4096, hidden_size=512):
-        super(ImageCaptionModel, self).__init__(
-            feat_extractor=L.VGG16Layers(),
-            lang_model=RNNLanguageModel(
-                n_vocab=len(vocab),
-                img_feat_size=img_feat_size,
-                hidden_size=hidden_size
-            )
-        )
+        super(ImageCaptionModel, self).__init__()
+        with self.init_scope():
+            self.feat_extractor = L.VGG16Layers()
+            self.lang_model = RNNLanguageModel(n_vocab=len(vocab),
+                img_feat_size=img_feat_size, hidden_size=hidden_size)
         self.vocab = vocab
 
     def __call__(self, imgs, labels):
@@ -38,29 +35,46 @@ class ImageCaptionModel(chainer.Chain):
             if (target == 0).all():  # eos
                 break
 
-            with chainer.using_config('train', True):
-                with chainer.using_config('enable_backprop', True):
-                    x = xp.asarray(labels[:, i])
-                    t = xp.asarray(labels[:, i + 1])
-                    y = self.lang_model(x)
+            x = xp.asarray(labels[:, i])
+            t = xp.asarray(labels[:, i+1])
+            y = self.lang_model(x)
 
-                    # Ignore (no grads) for eos labels
-                    mask = target.reshape((target.shape[0], 1)).repeat(y.data.shape[1], axis=1)
-                    y = y * mask
+            # Ignore (no grads) for eos labels
+            mask = target.reshape((target.shape[0], 1)).repeat(y.data.shape[1], axis=1)
+            y = y * mask
 
-                    loss += F.softmax_cross_entropy(y, t)
-                    size += xp.sum(target)
+            loss += F.softmax_cross_entropy(y, t)
+            size += xp.sum(target)
 
         loss /= size
         reporter.report({'loss': loss}, self)
 
         return loss
 
-    def predict(self, imgs, max_length=20, beam_width=20):
-        xp = self.xp
 
+    def prdict_one(self, img, max_length, beam):
+        if img.ndim != 3:  # (c, h, w)
+            raise ValueError('Predict a single image at a time')
+
+        xp = self.xp
+        results = [[]] * beam
+        with chainer.using_config('train', False):
+            feats = self.feat_extractor([img], ['fc7'])['fc7']
+            self.lang_model.reset_with_image_feat(feat)
+
+            for in range(max_length):
+
+    def predict(self, imgs, max_length=20, beam=20):
+        return [self.predict_one(im) for im in imgs]
+
+        with chainer.using_config('train', False):
+            for in range(max_length):
+
+        # Old beam search
         with chainer.no_backprop_mode():
-            img_feats = self.feat_extractor(imgs, ['fc7'])
+            img_feats = self.feat_extractor(imgs, ['conv5_3', 'fc7'])
+            print('-------------------------------')
+            print(img_feats['conv5_3'].shape)
             img_feats = img_feats['fc7']
 
         bos = self.vocab['<bos>']
@@ -84,9 +98,9 @@ class ImageCaptionModel(chainer.Chain):
 
                     # Predict next token given previous token
                     x = xp.asarray([tokens[-1]]).astype(xp.int32)
-                    y = F.softmax(net(x))
+                    y = F.log_softmax(net(x))
 
-                    token_likelihood = xp.log(y.data[0])
+                    token_likelihood = y.data[0]
                     token_likelihood = cuda.to_cpu(token_likelihood)
                     order = token_likelihood.argsort()[:-beam_width:-1]
 

@@ -10,7 +10,7 @@ def parse_args():
 
     # Snapshot intervals
     parser.add_argument('--iter-log', default=1)
-    parser.add_argument('--iter-plot', default=10)
+    parser.add_argument('--iter-plot', default=1)
     parser.add_argument('--iter-model-snapshot', default=1000)
 
     # Test specific
