@@ -6,133 +6,100 @@ from chainer import cuda
 
 
 class ImageCaptionModel(chainer.Chain):
-    def __init__(self, vocab, img_feat_size=4096, hidden_size=512):
+    def __init__(self, *, vocab, img_feat_size=4096, hidden_size=512):
         super(ImageCaptionModel, self).__init__()
         with self.init_scope():
             self.feat_extractor = L.VGG16Layers()
-            self.lang_model = RNNLanguageModel(n_vocab=len(vocab),
-                img_feat_size=img_feat_size, hidden_size=hidden_size)
+            self.lang_model = RNNLanguageModel(
+                n_vocab=len(vocab),
+                img_feat_size=img_feat_size,
+                hidden_size=hidden_size
+            )
         self.vocab = vocab
 
     def __call__(self, imgs, labels):
-        # Extract image features using VGG16
         with chainer.no_backprop_mode():
-            img_feats = self.feat_extractor(imgs, ['fc7'])
-            img_feat = img_feats['fc7']
+            img_feat = self.feat_extractor(imgs, ['fc7'])['fc7']
 
-        # Reset LSTM using the image features
         self.lang_model.reset_with_image_feat(img_feat)
 
-        eos = self.vocab['<eos>']
         xp = self.xp
-        loss = 0
-        size = 0
-        label_length = labels.shape[1]
-        for i in range(label_length - 1):
 
-            # Only consider non-eos targets
-            target = xp.where(xp.asarray(labels[:, i]) != eos, 1, 0).astype(xp.float32)
+        loss, size = 0, 0
+        eos = self.vocab['<eos>']
+        for i in range(labels.shape[1] - 1):
+            target = xp.where(xp.asarray(labels[:, i]) != eos, 1, 0) \
+                .astype(xp.float32)
             if (target == 0).all():  # eos
                 break
 
             x = xp.asarray(labels[:, i])
             t = xp.asarray(labels[:, i+1])
+
             y = self.lang_model(x)
-
-            # Ignore (no grads) for eos labels
             mask = target.reshape((target.shape[0], 1)).repeat(y.data.shape[1], axis=1)
-            y = y * mask
-
+            y *= mask
             loss += F.softmax_cross_entropy(y, t)
             size += xp.sum(target)
 
         loss /= size
         reporter.report({'loss': loss}, self)
-
         return loss
 
-
-    def prdict_one(self, img, max_length, beam):
+    def predict_one(self, img, max_length=15, beam=20):
         if img.ndim != 3:  # (c, h, w)
             raise ValueError('Predict a single image at a time')
-
         xp = self.xp
-        results = [[]] * beam
-        with chainer.using_config('train', False):
-            feats = self.feat_extractor([img], ['fc7'])['fc7']
-            self.lang_model.reset_with_image_feat(feat)
-
-            for in range(max_length):
-
-    def predict(self, imgs, max_length=20, beam=20):
-        return [self.predict_one(im) for im in imgs]
-
-        with chainer.using_config('train', False):
-            for in range(max_length):
-
-        # Old beam search
-        with chainer.no_backprop_mode():
-            img_feats = self.feat_extractor(imgs, ['conv5_3', 'fc7'])
-            print('-------------------------------')
-            print(img_feats['conv5_3'].shape)
-            img_feats = img_feats['fc7']
+        img = img[xp.newaxis, :]
 
         bos = self.vocab['<bos>']
         eos = self.vocab['<eos>']
+        results = [[]] * beam
+        with chainer.using_config('train', False):
+            feats = self.feat_extractor(img, ['fc7'])['fc7']
+            self.lang_model.reset_with_image_feat(feats)
 
-        n = imgs.shape[0]
-        labels = xp.empty((n, beam_width, max_length), dtype=xp.int32)
-        labels.fill(eos)
-
-        for img_feat in img_feats:  # for each image
-            self.lang_model.reset_with_image_feat(img_feat[xp.newaxis, :])
-            candidates = [(self.lang_model.copy(), [bos], 0)]
-
+            results = [{
+                'caption': [bos],
+                'score': 0,
+                'lm': self.lang_model.copy()
+            }]
             for _ in range(max_length):  # for each word
-                next_candidates = []
-                for prev_net, tokens, likelihood in candidates:  # for each candidate
-                    if tokens[-1] == eos:
-                        next_candidates.append((None, tokens, likelihood))
-                        continue  # check next candidate
-                    net = prev_net.copy()
+                next_results = []
+                for result in results:
+                    caption = result['caption']
+                    score = result['score']
+                    lm = result['lm']
 
-                    # Predict next token given previous token
-                    x = xp.asarray([tokens[-1]]).astype(xp.int32)
-                    y = F.log_softmax(net(x))
+                    if caption[-1] == eos:
+                        next_results.append({
+                            'caption': caption,
+                            'score': score,
+                            'lm': None
+                        })
+                    else:
+                        lm = lm.copy()
 
-                    token_likelihood = y.data[0]
-                    token_likelihood = cuda.to_cpu(token_likelihood)
-                    order = token_likelihood.argsort()[:-beam_width:-1]
+                        x = xp.asarray([caption[-1]]).astype('i')
+                        scores = F.log_softmax(lm(x))
 
-                    next_candidates.extend([(net, tokens + [i], likelihood + token_likelihood[i]) for i in order])
+                        scores = scores.data[0]
+                        token_likelihood = cuda.to_cpu(scores)
+                        order = scores.argsort()[:-beam:-1]
+                        next_results.extend([{
+                                'lm': lm,
+                                'caption': caption + [i],
+                                'score': score + scores[i]
+                            } for i in order])
 
-                candidates = sorted(next_candidates, key=lambda x: -x[2])[:beam_width]
-
-                if all([candidate[1][-1] == eos for candidate in candidates]):
+                results = sorted(next_results, key=lambda x: -x['score'])[:beam]
+                if all([r['caption'][-1] == eos for r in results]):
                     break
 
-            # TODO: Should not return inside loop, just testing
-            return candidates
-        """
-        labels.fill(eos)
-        labels[:, 0] =
-        for i in range(max_length):
-            target = xp.where(xp.asarray(labels[:, i]) != eos, 1, 0).astype(xp.float32)
-            with chainer.using_config('train', False):
-                with chainer.using_config('enable_backprop', False):
-                    x = xp.asarray(labels[:, i])
-                    t = xp.asarray(labels[:, i + 1])
-                    y = self.lang_model(x)
-                    y_max_idx = xp.argmax(y.data, axis=1)
-                    mask = target.reshape((len(target), 1)).repeat(y.data.shape[1], axis=1)
-                    y = y * mask
-                    loss += F.softmax_cross_entropy(y, t)
-                    size = xp.sum(target)
+            return results
 
-        loss /= size
-        reporter.report({'loss': loss}, self)
-        return loss
-        """
+    def predict(self, imgs, max_length=20, beam=20):
+        return [self.predict_one(im, max_length, beam) for im in imgs]
 
 
 class RNNLanguageModel(chainer.Chain):
