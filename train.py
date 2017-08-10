@@ -3,6 +3,7 @@ matplotlib.use('Agg')  # NOQA
 
 import numpy as np
 
+import chainer
 from chainer import optimizers
 from chainer import iterators
 from chainer import training
@@ -38,6 +39,10 @@ def main(args):
     optimizer = optimizers.Adam()
     optimizer.setup(model)
 
+    if args.gpu >= 0:
+        chainer.cuda.get_device_from_id(args.gpu).use()
+        model.to_gpu()
+
     updater = training.updater.StandardUpdater(train_iter,
                                                optimizer=optimizer,
                                                device=args.gpu)
@@ -48,8 +53,8 @@ def main(args):
     trainer.extend(extensions.PrintReport(['epoch', 'iteration', 'main/loss']), trigger=(1, 'iteration'))
     trainer.extend(extensions.snapshot_object(model, 'model_{.updater.iteration}'),
                    trigger=(args.iter_model_snapshot, 'iteration'))
-    # trainer.extend(extensions.snapshot_object(optimizer, 'optimizer_{.updater.iteration}'),
-    #                trigger=(args.iter_model_snapshot, 'iteration'))
+    trainer.extend(extensions.snapshot_object(optimizer, 'optimizer_{.updater.iteration}'),
+                   trigger=(args.iter_model_snapshot, 'iteration'))
     trainer.extend(extensions.ProgressBar())
     trainer.run()
 
