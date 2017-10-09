@@ -34,7 +34,6 @@ def get_vg_vocabulary(include_inverted=False):
     return vocab
 
 
-
 def concat_captioning_examples(batch, device=None, padding=None,
                                max_caption_length=None):
     def _concat_arrays(arrays):
@@ -94,4 +93,5 @@ class ImageCaptionVGG16Transform(object):
 
         # Select a caption from all
         caption = captions[0]
+
         return img, caption

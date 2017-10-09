@@ -1,8 +1,3 @@
-import matplotlib  # NOQA
-matplotlib.use('Agg')  # NOQA
-
-import numpy as np
-
 import chainer
 from chainer import optimizers
 from chainer import iterators
@@ -19,11 +14,12 @@ from model import ImageCaptionModel
 def main(args):
     vocab = dataset.get_vg_vocabulary()
     train = dataset.get_vg_train()
-    print('len', len(train))
     train = TransformDataset(train, dataset.ImageCaptionVGG16Transform())
-    train_iter = iterators.SerialIterator(train, args.batch_size)  # Batch size is 1 for DenseCap
+    train_iter = iterators.SerialIterator(train, args.batch_size)
 
-    model = ImageCaptionModel(vocab=vocab, rnn=args.rnn)
+    model = ImageCaptionModel(vocab, rnn=args.rnn,
+                              ignore_label=args.ignore_label,
+                              dropout_ratio=args.dropout_ratio)
     optimizer = optimizers.Adam()
     optimizer.setup(model)
 
@@ -33,7 +29,7 @@ def main(args):
 
     def concat_captioning_examples(batch, device):
         if args.rnn == 'lstm':
-            padding = -1
+            padding = -1  # Ignore label for LSTM
             max_caption_length = 10
         elif args.rnn == 'nsteplstm':
             padding = None
@@ -47,12 +43,17 @@ def main(args):
         train_iter, optimizer=optimizer, device=args.gpu,
         converter=concat_captioning_examples)
 
-    trainer = training.Trainer(updater, out=args.out, stop_trigger=(args.max_epoch, 'epoch'))
-    trainer.extend(extensions.LogReport(trigger=(args.iter_log, 'iteration')))
-    trainer.extend(extensions.PlotReport(['main/loss'], trigger=(args.iter_plot, 'iteration')))
-    trainer.extend(extensions.PrintReport(['epoch', 'iteration', 'elapsed_time', 'main/loss']), trigger=(1, 'iteration'))
-    trainer.extend(extensions.snapshot_object(model, 'model_{.updater.iteration}'),
-                   trigger=(args.iter_model_snapshot, 'iteration'))
+    trainer = training.Trainer(
+        updater, out=args.out, stop_trigger=(args.max_iters, 'iteration'))
+    trainer.extend(extensions.LogReport(trigger=(args.log_iter, 'iteration')))
+    trainer.extend(extensions.PlotReport(
+        ['main/loss'], trigger=(args.log_iter, 'iteration')))
+    trainer.extend(extensions.PrintReport(
+        ['elapsed_time', 'epoch', 'iteration', 'main/loss']),
+        trigger=(args.log_iter, 'iteration'))
+    trainer.extend(extensions.snapshot_object(
+        model, 'model_{.updater.iteration}'),
+        trigger=(args.snapshot_iter, 'iteration'))
     trainer.extend(extensions.ProgressBar())
     trainer.run()
 
