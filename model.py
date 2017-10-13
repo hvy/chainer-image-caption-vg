@@ -196,19 +196,22 @@ class NStepLSTMLanguageModel(chainer.Chain):
         h = F.split_axis(h, h.shape[0], axis=0)
         hx, cx, _ = self.lstm(None, None, h)
 
-        caption_lens = [len(c) for c in captions]
+        ys = [c[:-1] for c in captions]
+        ts = [c[1:] for c in captions]
+
+        caption_lens = [len(y) for y in ys]
         caption_sections = np.cumsum(caption_lens[:-1])
-        xs = F.concat(captions, axis=0)
+
+        xs = F.concat(ys, axis=0)
         xs = self.embed_word(xs)
         xs = F.split_axis(xs, caption_sections, axis=0)
 
         _, _, ys = self.lstm(hx, cx, xs)
 
-
         ys = F.concat(ys, axis=0)
         pred_captions = self.decode_caption(F.dropout(ys, self.dropout_ratio))
-        ts = F.concat(captions, axis=0)
-        loss = F.softmax_cross_entropy(pred_captions[:-1], ts[1:], reduce='no')
+        ts = F.concat(ts, axis=0)
+        loss = F.softmax_cross_entropy(pred_captions, ts, reduce='no')
         loss = F.sum(loss) / (len(ys) - 1)
         return loss
 
