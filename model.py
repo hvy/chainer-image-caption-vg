@@ -228,6 +228,7 @@ class NStepLSTMLanguageModel(chainer.Chain):
             xs = F.split_axis(xs, xs.shape[0], axis=0)
             hx, cx, ys = self.lstm(hx, cx, xs)
             ys = F.concat(ys, axis=0)
+            ys = self.decode_caption(F.dropout(ys, self.dropout_ratio))
             pred = ys.data.argmax(axis=1).astype('i')
             if (pred == eos).all():
                 break
